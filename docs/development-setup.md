@@ -6,13 +6,44 @@ This document provides exact, reproducible commands to develop, lint, test, and 
 
 ## 1. Prerequisites & Infrastructure Services
 
-Ensure PostgreSQL and Qdrant are running locally before starting the backend:
+Install Docker Desktop, or Docker Engine with the Docker Compose plugin. To
+start the full project (frontend, backend, PostgreSQL, and Qdrant), create
+your local environment file from the example in the repository root:
+
+```bash
+cp .env.example .env
+```
+
+On Windows PowerShell, use `Copy-Item .env.example .env`. Edit `.env` to
+replace the example database password. If you select the Gemini provider,
+set `GEMINI_API_KEY` to your own key from
+[Google AI Studio](https://aistudio.google.com/apikey); don't use a shared,
+demo, or test key. Leave it blank if you use mock providers. Keep `.env`
+private; it is ignored by Git. If `.env` already exists, edit it instead of
+copying over it.
+
+Start all services from the repository root with:
+
+```bash
+docker compose up --build
+```
+
+The dashboard is at `http://localhost:5173`; the API documentation is at
+`http://localhost:8000/api/docs`. Compose applies database migrations
+automatically. PostgreSQL, Qdrant, and uploaded documents use persistent
+Docker volumes; Postgres and Qdrant are private to the Compose network.
+`docker compose down` stops the services without deleting their data. For
+background mode, use `docker compose up --build -d` and check status with
+`docker compose ps`. Avoid `docker compose down --volumes` unless you intend
+to erase persisted data.
+
+For individual local development, ensure PostgreSQL and Qdrant are running:
 
 - **PostgreSQL**: Running on `localhost:5432` with database `smart-cloud`.
   - Schema Isolation: All research tables live in the `research` schema, strictly isolated from other database objects.
 - **Qdrant**: Running on `localhost:6333` (REST) and `localhost:6334` (gRPC).
   ```bash
-  docker run -d -p 6333:6333 -p 6334:6334 -v $(pwd)/qdrant_storage:/qdrant/storage qdrant/qdrant
+  docker run -d -p 6333:6333 -p 6334:6334 -v qdrant_storage:/qdrant/storage qdrant/qdrant
   ```
 
 ---

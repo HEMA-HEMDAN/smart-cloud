@@ -1,0 +1,77 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME:-smart-cloud}
+      POSTGRES_USER: ${DB_USER:-myuser}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-mypassword}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:v1.13.6
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  server:
+    build:
+      context: ./server
+    environment:
+      DB_NAME: ${DB_NAME:-smart-cloud}
+      DB_USER: ${DB_USER:-myuser}
+      DB_PASSWORD: ${DB_PASSWORD:-mypassword}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      QDRANT_HOST: qdrant
+      QDRANT_PORT: 6333
+      QDRANT_GRPC_PORT: 6334
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ENVIRONMENT: production
+      LOG_LEVEL: INFO
+      DOCUMENTS_STORAGE_PATH: /app/data/documents
+    volumes:
+      - documents_data:/app/data/documents
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health/ready', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+    restart: unless-stopped
+
+  front:
+    build:
+      context: ./front
+    ports:
+      - "127.0.0.1:5173:80"
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  qdrant_data:
+  documents_data:

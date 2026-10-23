@@ -29,6 +29,33 @@ for the research scope, strategies, and evaluation protocol.
 
 ## Run the API
 
+For the complete application and its PostgreSQL and Qdrant services, start
+Docker Compose from the repository root. First create your local environment
+file (`Copy-Item` is the equivalent command in Windows PowerShell):
+
+```bash
+cp .env.example .env
+```
+
+Edit `.env` and replace the example database password. If you use Gemini for
+experiments, set `GEMINI_API_KEY` to your own key from
+[Google AI Studio](https://aistudio.google.com/apikey); do not use a shared,
+demo, or test key. This key is optional when using the mock providers. Keep
+`.env` private and do not commit or send it. If `.env` already exists, edit
+it instead of copying over it.
+
+Start the project from the repository root:
+
+```bash
+docker compose up --build
+```
+
+Compose applies database migrations automatically and persists database,
+Qdrant, and uploaded-document data in named volumes. The dashboard is at
+<http://localhost:5173>; API docs are at <http://localhost:8000/api/docs>.
+See the root [`README.md`](../README.md) for Windows setup, background mode,
+logs, and safe shutdown instructions.
+
 Requirements: Python 3.12+, a running PostgreSQL database, and a running
 Qdrant service. Create the database before applying migrations.
 

@@ -48,6 +48,47 @@ flowchart LR
     DB --> Analysis[Offline analysis package]
 ```
 
+### Run the complete project with Docker
+
+You need Docker Desktop, or Docker Engine with the Docker Compose plugin.
+From the repository root, create your local settings file from the example:
+
+```bash
+cp .env.example .env
+```
+
+On Windows PowerShell, use `Copy-Item .env.example .env`. Open `.env` and
+replace the example `DB_PASSWORD` with a password of your choice. If you want
+to run experiments with Gemini, also set `GEMINI_API_KEY` to **your own
+Gemini API key** from [Google AI Studio](https://aistudio.google.com/apikey).
+Do not use a shared, demo, or test key, and do not commit or send your `.env`
+file. A Gemini key is optional; without one, choose a mock provider in the
+dashboard. If `.env` already exists, edit it instead of copying over it.
+
+Start the complete application from the repository root with one command:
+
+```bash
+docker compose up --build
+```
+
+Compose builds the frontend and backend, starts PostgreSQL and Qdrant, waits
+for the backend to be ready, and applies database migrations automatically.
+Open the dashboard at <http://localhost:5173>; the API docs are at
+<http://localhost:8000/api/docs>. The command stays attached to the logs; use
+`Ctrl+C` to stop the services. To run them in the background instead, use
+`docker compose up --build -d`, then view logs with `docker compose logs -f`.
+
+PostgreSQL data, Qdrant indexes, and uploaded documents persist in named
+Docker volumes after containers stop. `docker compose down` stops and removes
+the containers but keeps the data. Only use `docker compose down --volumes`
+if you intend to delete that data too. To see service status, run
+`docker compose ps`.
+
+The example database credentials are for local development only. Replace
+them before exposing services to a network. If port `5173` or `8000` is
+already in use, stop the other service or change the host port in
+`docker-compose.yml`.
+
 ### Typical researcher workflow
 
 1. **Prepare the services.** Start PostgreSQL and Qdrant, then configure the
@@ -167,29 +208,15 @@ may resolve to newer compatible patch or minor versions.
     └── tests/              Backend unit and integration tests
 ```
 
-The API is versioned under `/api/v1`. The frontend uses the same-origin `/api`
-path during Vite development, which is proxied to `http://localhost:8000`.
-PostgreSQL and Qdrant are independent backing services; starting the web
-application alone does not start either dependency.
+The API is versioned under `/api/v1`. In Docker, the frontend's Nginx server
+forwards same-origin `/api` requests to the backend. During local Vite
+development, requests are proxied to `http://localhost:8000`.
 
 ## Requirements
 
-- Python **3.12 or newer**
-- Node.js and npm
-- PostgreSQL, with a database and user created for this project
-- Qdrant, reachable at `localhost:6333` (REST) and `localhost:6334` (gRPC)
-- Docker, if you want to run Qdrant with the example below
-
-Start Qdrant locally:
-
-```bash
-docker run --detach --name smart-cloud-qdrant \
-  -p 6333:6333 -p 6334:6334 \
-  qdrant/qdrant
-```
-
-The command creates a named container. If that container already exists,
-start it with `docker start smart-cloud-qdrant` instead of creating it again.
+- Docker Engine and the Docker Compose plugin for the all-in-one setup
+- Python **3.12 or newer**, Node.js and npm, PostgreSQL, and Qdrant for
+  running the services individually during local development
 
 ## Local development setup
 
