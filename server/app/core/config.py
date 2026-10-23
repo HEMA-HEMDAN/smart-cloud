@@ -39,9 +39,9 @@ class Settings(BaseSettings):
 
     # ── AI providers ─────────────────────────────────────────────────────────
     gemini_api_key: str | None = Field(default=None)
-    gemini_embedding_model: str = Field(default="models/text-embedding-004")
-    gemini_generation_model: str = Field(default="models/gemini-1.5-flash")
-    embedding_dimension: int = Field(default=768)
+    gemini_embedding_model: str = Field(default="models/gemini-embedding-2")
+    gemini_generation_model: str = Field(default="models/gemini-3.7-flash")
+    embedding_dimension: int = Field(default=3072)
 
     # ── Application ──────────────────────────────────────────────────────────
     environment: str = Field(default="development")

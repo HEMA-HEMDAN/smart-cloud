@@ -28,6 +28,7 @@ import {
   BarChart2,
   Table,
   StopCircle,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   BarChart,
@@ -294,6 +295,19 @@ export const RunDetails: React.FC = () => {
               />
             </button>
           ))}
+        </div>
+      )}
+
+      {/* Run Failure Alert */}
+      {currentRun?.status === 'failed' && (
+        <div className="glass-panel p-4 rounded-xl border border-red-500/30 bg-red-500/10 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <h3 className="text-sm font-semibold text-red-300">Run Failed</h3>
+            <p className="text-xs text-red-200/80">
+              {currentRun.error_message || liveProgress?.error || 'All or key requests failed during execution. Inspect the raw event table below for per-request details.'}
+            </p>
+          </div>
         </div>
       )}
 

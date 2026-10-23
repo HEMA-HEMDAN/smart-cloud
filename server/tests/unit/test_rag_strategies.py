@@ -34,6 +34,9 @@ def create_mock_qdrant() -> MagicMock:
         "version_hash": "v1",
         "authorized_consumers": ["c_00", "c_01"],
     }
+    mock_resp = MagicMock()
+    mock_resp.points = [mock_hit]
+    qdrant.query_points = AsyncMock(return_value=mock_resp)
     qdrant.search = AsyncMock(return_value=[mock_hit])
     return qdrant
 
@@ -129,10 +132,14 @@ async def test_authorization_filter_in_shared_answer() -> None:
 
     result = await strat.answer(req)
     assert result.answer is not None
-    assert qdrant.search.called
+    assert qdrant.query_points.called or qdrant.search.called
 
-    # Verify that query_filter was passed to Qdrant search
-    call_kwargs = qdrant.search.call_args.kwargs
+    # Verify that query_filter was passed to Qdrant query
+    call_kwargs = (
+        qdrant.query_points.call_args.kwargs
+        if qdrant.query_points.called
+        else qdrant.search.call_args.kwargs
+    )
     assert "query_filter" in call_kwargs
     filter_obj = call_kwargs["query_filter"]
     assert filter_obj is not None

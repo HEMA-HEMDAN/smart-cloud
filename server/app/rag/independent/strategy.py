@@ -146,11 +146,21 @@ class IndependentRAG(RAGStrategy):
 
         # Retrieve
         try:
-            hits = await self._qdrant.search(
-                collection_name=collection,
-                query_vector=query_vec,
-                limit=request.top_k,
-            )
+            if hasattr(self._qdrant, "query_points"):
+                response = await self._qdrant.query_points(
+                    collection_name=collection,
+                    query=query_vec,
+                    limit=request.top_k,
+                )
+                hits = response.points if hasattr(response, "points") else response
+            elif hasattr(self._qdrant, "search"):
+                hits = await self._qdrant.search(
+                    collection_name=collection,
+                    query_vector=query_vec,
+                    limit=request.top_k,
+                )
+            else:
+                hits = []
         except Exception as exc:
             logger.error("retrieval.failed", collection=collection, error=str(exc))
             hits = []

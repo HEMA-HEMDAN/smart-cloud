@@ -33,6 +33,9 @@ class EmbeddingProviderError(Exception):
     message: str
     retryable: bool = False
 
+    def __str__(self) -> str:
+        return f"[{self.provider}] {self.message}"
+
 
 class EmbeddingProvider(ABC):
     """Interface that all embedding provider implementations must satisfy."""

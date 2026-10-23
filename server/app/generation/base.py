@@ -36,6 +36,9 @@ class GenerationProviderError(Exception):
     message: str
     retryable: bool = False
 
+    def __str__(self) -> str:
+        return f"[{self.provider}] {self.message}"
+
 
 class GenerationProvider(ABC):
     PROVIDER_NAME: ClassVar[str]

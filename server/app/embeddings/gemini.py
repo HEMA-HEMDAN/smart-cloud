@@ -59,12 +59,26 @@ class GeminiEmbeddingProvider(EmbeddingProvider):
             raise ValueError("texts must be non-empty")
         t0 = time.monotonic()
         try:
-            # google-generativeai SDK is synchronous; wrap if needed.
-            result = self._genai.embed_content(  # type: ignore[attr-defined]
-                model=self._model,
-                content=texts,
-                task_type="retrieval_document",
-            )
+            task_type = "retrieval_document" if len(texts) > 1 else "retrieval_query"
+            try:
+                result = self._genai.embed_content(  # type: ignore[attr-defined]
+                    model=self._model,
+                    content=texts,
+                    task_type=task_type,
+                    output_dimensionality=self._dim,
+                )
+            except (TypeError, Exception) as call_err:
+                # If output_dimensionality parameter is not supported by the model, retry without it
+                err_msg = str(call_err).lower()
+                if "output_dimensionality" in err_msg or "unexpected keyword" in err_msg:
+                    result = self._genai.embed_content(  # type: ignore[attr-defined]
+                        model=self._model,
+                        content=texts,
+                        task_type=task_type,
+                    )
+                else:
+                    raise
+
             raw_embedding = result["embedding"]
             vectors: list[list[float]]
             if raw_embedding and isinstance(raw_embedding[0], float):

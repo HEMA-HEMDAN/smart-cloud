@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from analysis.evaluation import compute_answer_correctness, compute_recall_at_k
+from app.core.config import settings
 from app.db.models import (
     DocumentVersion,
     ExperimentConfig,
@@ -190,10 +191,10 @@ async def execute_experiment_run(
                 "gemini.provider.failed_fallback_to_mock",
                 error=str(exc),
             )
-            embedder = MockEmbeddingProvider()
+            embedder = MockEmbeddingProvider(dim=settings.embedding_dimension)
             generator = MockGenerationProvider()
     else:
-        embedder = MockEmbeddingProvider()
+        embedder = MockEmbeddingProvider(dim=settings.embedding_dimension)
         generator = MockGenerationProvider()
 
     qdrant = get_qdrant()
@@ -465,33 +466,49 @@ async def execute_experiment_run(
 
             # ── 3. ADVERSARIAL AUTHORIZATION PROBE ───────────────────────────
             # Verify that an unauthorized consumer receives exactly 0 chunks
-            probe_req = RAGRequest(
-                run_id=run_key,
-                question_id="security_probe_q",
-                question="Adversarial probe query for unauthorized chunk extraction",
-                consumer_id="adversary_unauthorized_user",
-                top_k=top_k,
-                repetition_index=rep_idx,
-            )
-            probe_res = await strategy_b.answer(probe_req)
-            if len(probe_res.retrieved_chunks) > 0:
-                logger.critical(
-                    "security.violation.cross_consumer_leakage",
+            try:
+                probe_req = RAGRequest(
                     run_id=run_key,
-                    repetition=rep_idx,
-                    retrieved_count=len(probe_res.retrieved_chunks),
+                    question_id="security_probe_q",
+                    question="Adversarial probe query for unauthorized chunk extraction",
+                    consumer_id="adversary_unauthorized_user",
+                    top_k=top_k,
+                    repetition_index=rep_idx,
                 )
-                ACTIVE_RUN_PROGRESS[run_key]["security_violations"] += 1
+                probe_res = await strategy_b.answer(probe_req)
+                if len(probe_res.retrieved_chunks) > 0:
+                    logger.critical(
+                        "security.violation.cross_consumer_leakage",
+                        run_id=run_key,
+                        repetition=rep_idx,
+                        retrieved_count=len(probe_res.retrieved_chunks),
+                    )
+                    ACTIVE_RUN_PROGRESS[run_key]["security_violations"] += 1
+            except Exception as exc:
+                logger.warning("security.probe.failed", run_id=run_key, error=str(exc))
 
             ACTIVE_RUN_PROGRESS[run_key]["elapsed_seconds"] = round(
                 time.monotonic() - t0_start, 2
             )
 
-        # Finished all repetitions successfully
-        async with session_factory() as s:
-            await update_run_status(s, run_id, RunStatus.COMPLETED, finished=True)
+        # Finished all repetitions
+        final_status = RunStatus.COMPLETED
+        final_err: str | None = None
+        if (
+            ACTIVE_RUN_PROGRESS[run_key]["completed_requests"] == 0
+            and ACTIVE_RUN_PROGRESS[run_key]["failed_requests"] > 0
+        ):
+            final_status = RunStatus.FAILED
+            final_err = (
+                "All benchmark requests failed during execution. "
+                "Check provider configuration or credentials."
+            )
+            ACTIVE_RUN_PROGRESS[run_key]["error"] = final_err
 
-        ACTIVE_RUN_PROGRESS[run_key]["status"] = RunStatus.COMPLETED
+        async with session_factory() as s:
+            await update_run_status(s, run_id, final_status, error_message=final_err, finished=True)
+
+        ACTIVE_RUN_PROGRESS[run_key]["status"] = final_status
         ACTIVE_RUN_PROGRESS[run_key]["elapsed_seconds"] = round(
             time.monotonic() - t0_start, 2
         )
