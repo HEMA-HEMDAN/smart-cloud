@@ -1,32 +1,44 @@
-# React + TypeScript + Vite
+# Smart Cloud Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+The dashboard is the React and TypeScript interface for the Smart Cloud
+research instrument. It lets researchers inspect uploaded document versions,
+configure and launch paired experiments, follow run progress, and examine
+results and diagnostics.
 
-Currently, two official plugins are available:
+The experiment compares two backend strategies: independent RAG prepares a
+separate document index per consumer, while shared RAG prepares document
+chunks and embeddings on first demand and reuses them across consumers.
+Questions are still retrieved and answered afresh in both strategies; answer
+caching is not part of the comparison.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## Pages
 
-## React Compiler
+- **Overview** — experiment and research summary.
+- **Experiments** — browse experiment configurations and runs.
+- **New experiment** — upload/select a document and configure a workload.
+- **Run details** — inspect execution progress and per-run results.
+- **Analysis** — compare cost, latency, reuse, and quality metrics.
+- **Diagnostics** — check backend and dependency health.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Run locally
 
-## Expanding the Oxlint configuration
+Requirements: Node.js/npm and a running backend. The development server
+forwards `/api` requests to `http://localhost:8000`.
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+```bash
+npm install
+npm run dev
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+Open <http://localhost:5173>. Start and configure the backend by following
+[`../server/README.md`](../server/README.md).
+
+## Build and lint
+
+```bash
+npm run build
+npm run lint
+```
+
+The build runs TypeScript project checks followed by the Vite production
+build.
