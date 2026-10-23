@@ -4,8 +4,8 @@ Each simulated consumer independently prepares its own documents.
 Prepared artifacts (chunks, vectors) are stored in a consumer-scoped Qdrant
 collection. No artifact sharing between consumers is permitted.
 
-INVARIANT: collection_name() includes consumer_id so that two consumers
-working on the same document never share vectors.
+INVARIANT: collection_name() includes run_id, repetition_index, and consumer_id
+so that two consumers working on the same document never share vectors.
 """
 
 from __future__ import annotations
@@ -21,22 +21,12 @@ from qdrant_client.models import (
     VectorParams,
 )
 
+from app.documents.extractor import chunk_document_text
 from app.embeddings.base import EmbeddingProvider
 from app.generation.base import GenerationProvider, Message
 from app.rag.base import RAGRequest, RAGResult, RAGStrategy, RetrievedChunk
 
 logger = structlog.get_logger(__name__)
-
-
-def _chunk_text(text: str, chunk_size: int = 512, overlap: int = 64) -> list[str]:
-    """Naive fixed-size character chunker with overlap."""
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = min(start + chunk_size, len(text))
-        chunks.append(text[start:end])
-        start += chunk_size - overlap
-    return chunks
 
 
 class IndependentRAG(RAGStrategy):
@@ -54,11 +44,17 @@ class IndependentRAG(RAGStrategy):
         self._generator = generation_provider
         self._qdrant = qdrant_client
 
-    def collection_name(self, run_id: str, consumer_id: str | None = None) -> str:
-        """Collection is scoped to run AND consumer – never shared."""
-        suffix = f"{run_id}_{consumer_id}" if consumer_id else run_id
-        # Sanitise: Qdrant collection names may not contain hyphens
-        return f"ind_{suffix}".replace("-", "_")
+    def collection_name(
+        self,
+        run_id: str,
+        consumer_id: str | None = None,
+        repetition_index: int = 0,
+    ) -> str:
+        """Collection is scoped to run, repetition index, and consumer – never shared."""
+        safe_run = run_id.replace("-", "")[:8]
+        cid = consumer_id or "default"
+        # Qdrant collection name cannot contain hyphens
+        return f"ind_{safe_run}_rep{repetition_index}_{cid}".replace("-", "_")
 
     async def prepare_document(
         self,
@@ -67,12 +63,15 @@ class IndependentRAG(RAGStrategy):
         text: str,
         run_id: str,
         consumer_id: str,
+        chunk_size: int = 512,
+        chunk_overlap: int = 64,
+        repetition_index: int = 0,
     ) -> dict[str, Any]:
         """Chunk, embed, and index the document for this specific consumer."""
         t0 = time.monotonic()
-        collection = self.collection_name(run_id, consumer_id)
+        collection = self.collection_name(run_id, consumer_id, repetition_index)
 
-        chunks = _chunk_text(text)
+        chunks = chunk_document_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         if not chunks:
             raise ValueError(f"Document {document_id} produced no chunks.")
 
@@ -93,7 +92,9 @@ class IndependentRAG(RAGStrategy):
                 strategy=self.STRATEGY_NAME,
             )
 
-        embedding_result = await self._embedder.embed(chunks)
+        chunk_texts = [c["text"] for c in chunks]
+        embedding_result = await self._embedder.embed(chunk_texts)
+
         points = [
             PointStruct(
                 id=str(uuid.uuid4()),
@@ -103,12 +104,13 @@ class IndependentRAG(RAGStrategy):
                     "version_hash": version_hash,
                     "consumer_id": consumer_id,
                     "run_id": run_id,
-                    "chunk_index": i,
-                    "text": chunk,
+                    "chunk_id": chunk["chunk_id"],
+                    "chunk_index": chunk["chunk_index"],
+                    "text": chunk["text"],
                     "strategy": self.STRATEGY_NAME,
                 },
             )
-            for i, (chunk, vec) in enumerate(zip(chunks, embedding_result.vectors, strict=False))
+            for chunk, vec in zip(chunks, embedding_result.vectors, strict=False)
         ]
         await self._qdrant.upsert(collection_name=collection, points=points)
 
@@ -133,7 +135,9 @@ class IndependentRAG(RAGStrategy):
 
     async def answer(self, request: RAGRequest) -> RAGResult:
         total_t0 = time.monotonic()
-        collection = self.collection_name(request.run_id, request.consumer_id)
+        collection = self.collection_name(
+            request.run_id, request.consumer_id, request.repetition_index
+        )
 
         # Embed query
         retrieval_t0 = time.monotonic()
@@ -141,16 +145,21 @@ class IndependentRAG(RAGStrategy):
         query_vec = query_embedding.vectors[0]
 
         # Retrieve
-        hits = await self._qdrant.search(
-            collection_name=collection,
-            query_vector=query_vec,
-            limit=request.top_k,
-        )
+        try:
+            hits = await self._qdrant.search(
+                collection_name=collection,
+                query_vector=query_vec,
+                limit=request.top_k,
+            )
+        except Exception as exc:
+            logger.error("retrieval.failed", collection=collection, error=str(exc))
+            hits = []
+
         retrieval_ms = (time.monotonic() - retrieval_t0) * 1000
 
         chunks = [
             RetrievedChunk(
-                chunk_id=str(h.id),
+                chunk_id=str(h.payload.get("chunk_id", h.id)),
                 text=h.payload.get("text", ""),
                 score=h.score,
                 document_id=h.payload.get("document_id", ""),

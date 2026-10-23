@@ -34,6 +34,7 @@ dependencies = [
     # Utilities
     "python-dotenv>=1.0.0",
     "python-multipart>=0.0.9",
+    "pypdf>=4.2.0",
     "tenacity>=8.3.0",
     "structlog>=24.4.0",
 ]

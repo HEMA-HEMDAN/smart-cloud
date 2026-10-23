@@ -31,6 +31,6 @@ def compute_reuse_summary(prep_df: pd.DataFrame) -> dict[str, Any]:
         "total_preparation_events": int(total),
         "first_preparations": int(first_preps),
         "reuses": int(reused),
-        "reuse_rate": float(reused / total) if total > 0 else 0.0,
+        "reuse_rate": float(reused / total) if total > 0 else None,
         "avoided_preparations": int(reused),
     }

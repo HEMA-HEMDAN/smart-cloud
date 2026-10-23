@@ -1,0 +1,3 @@
+Organization-Aware Demand-Driven Shared AI Intelligence.
+
+This research evaluates whether intermediate artifact reuse reduces preparation expenditure while maintaining answer accuracy and strict cross-consumer authorization isolation.

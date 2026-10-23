@@ -1,18 +1,19 @@
 """Strategy B – Shared Intelligence RAG.
 
-The first eligible consumer prepares a document once.
+The first eligible consumer prepares a document once into a shared collection.
 Subsequent authorized consumers reuse the shared vectors.
 
 Authorization: every retrieval call checks consumer authorization against
-the chunk payload. Cross-consumer leakage is a correctness failure, not
-an acceptable trade-off.
+the chunk payload ('authorized_consumers' field). Cross-consumer leakage
+is a correctness failure, not an acceptable trade-off.
 
-INVARIANT: collection_name() does NOT include consumer_id – shared across all
-authorized consumers for a given run.
+INVARIANT: collection_name() does NOT include consumer_id – it is shared across all
+authorized consumers for a given run and repetition.
 """
 
 from __future__ import annotations
 
+import contextlib
 import time
 import uuid
 from typing import Any
@@ -23,25 +24,17 @@ from qdrant_client.models import (
     FieldCondition,
     Filter,
     MatchAny,
+    PayloadSchemaType,
     PointStruct,
     VectorParams,
 )
 
+from app.documents.extractor import chunk_document_text
 from app.embeddings.base import EmbeddingProvider
 from app.generation.base import GenerationProvider, Message
 from app.rag.base import RAGRequest, RAGResult, RAGStrategy, RetrievedChunk
 
 logger = structlog.get_logger(__name__)
-
-
-def _chunk_text(text: str, chunk_size: int = 512, overlap: int = 64) -> list[str]:
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = min(start + chunk_size, len(text))
-        chunks.append(text[start:end])
-        start += chunk_size - overlap
-    return chunks
 
 
 class SharedIntelligenceRAG(RAGStrategy):
@@ -58,13 +51,22 @@ class SharedIntelligenceRAG(RAGStrategy):
         self._embedder = embedding_provider
         self._generator = generation_provider
         self._qdrant = qdrant_client
-        # In-memory record of prepared documents within a run.
-        # Production: store in DB PreparedDocument table.
-        self._prepared: dict[str, set[str]] = {}  # run_id -> set[document_id]
+        # Key: (collection_name, document_id) -> version_hash
+        self._prepared_versions: dict[tuple[str, str], str] = {}
+        # Key: (collection_name, document_id) -> set of consumer_ids
+        self._authorized_consumers: dict[tuple[str, str], set[str]] = {}
+        # Key: (collection_name, document_id) -> list of point_ids (UUID strings)
+        self._doc_points: dict[tuple[str, str], list[str]] = {}
 
-    def collection_name(self, run_id: str, consumer_id: str | None = None) -> str:
-        """Shared collection – NOT consumer-scoped."""
-        return f"shared_{run_id}".replace("-", "_")
+    def collection_name(
+        self,
+        run_id: str,
+        consumer_id: str | None = None,
+        repetition_index: int = 0,
+    ) -> str:
+        """Shared collection scoped to run and repetition – NOT consumer-scoped."""
+        safe_run = run_id.replace("-", "")[:8]
+        return f"shared_{safe_run}_rep{repetition_index}".replace("-", "_")
 
     async def prepare_document(
         self,
@@ -73,32 +75,65 @@ class SharedIntelligenceRAG(RAGStrategy):
         text: str,
         run_id: str,
         consumer_id: str,
+        chunk_size: int = 512,
+        chunk_overlap: int = 64,
+        repetition_index: int = 0,
     ) -> dict[str, Any]:
-        """Prepare document once; subsequent calls record reuse."""
-        t0 = time.monotonic()
-        collection = self.collection_name(run_id)
-        already_prepared = document_id in self._prepared.get(run_id, set())
+        """
+        Prepare document once on first demand; subsequent consumers reuse artifacts.
 
-        if already_prepared:
+        When reused, the new consumer is added to 'authorized_consumers' in point payloads.
+        """
+        t0 = time.monotonic()
+        collection = self.collection_name(
+            run_id=run_id, repetition_index=repetition_index
+        )
+        doc_key = (collection, document_id)
+
+        # Check if already prepared with matching version
+        existing_version = self._prepared_versions.get(doc_key)
+        if existing_version is not None and existing_version == version_hash:
+            # REUSE EVENT: add consumer to authorized list for this document
+            self._authorized_consumers.setdefault(doc_key, set()).add(consumer_id)
+            all_authorized = sorted(self._authorized_consumers[doc_key])
+
+            # Update point payloads in Qdrant to authorize new consumer
+            point_ids = self._doc_points.get(doc_key, [])
+            if point_ids:
+                try:
+                    await self._qdrant.set_payload(
+                        collection_name=collection,
+                        payload={"authorized_consumers": all_authorized},
+                        points=point_ids,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "qdrant.set_payload.warning",
+                        collection=collection,
+                        error=str(exc),
+                    )
+
             duration_ms = (time.monotonic() - t0) * 1000
             logger.info(
                 "preparation.reused",
                 strategy=self.STRATEGY_NAME,
                 document_id=document_id,
                 consumer_id=consumer_id,
+                authorized_count=len(all_authorized),
+                duration_ms=round(duration_ms, 2),
             )
             return {
                 "strategy": self.STRATEGY_NAME,
                 "collection": collection,
-                "chunk_count": None,  # not re-counted
+                "chunk_count": len(point_ids),
                 "embedding_tokens_used": 0,
                 "embedding_tokens_available": True,
                 "duration_ms": round(duration_ms, 2),
                 "is_reuse": True,
             }
 
-        # First preparation
-        chunks = _chunk_text(text)
+        # FIRST PREPARATION (or re-preparation due to version update)
+        chunks = chunk_document_text(text, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         if not chunks:
             raise ValueError(f"Document {document_id} produced no chunks.")
 
@@ -112,33 +147,49 @@ class SharedIntelligenceRAG(RAGStrategy):
                     distance=Distance.COSINE,
                 ),
             )
+            # Create payload index for fast authorized_consumers filtering
+            with contextlib.suppress(Exception):
+                await self._qdrant.create_payload_index(
+                    collection_name=collection,
+                    field_name="authorized_consumers",
+                    field_schema=PayloadSchemaType.KEYWORD,
+                )
+
             logger.info(
                 "qdrant.collection.created",
                 collection=collection,
                 strategy=self.STRATEGY_NAME,
             )
 
-        embedding_result = await self._embedder.embed(chunks)
+        chunk_texts = [c["text"] for c in chunks]
+        embedding_result = await self._embedder.embed(chunk_texts)
+
+        new_point_ids: list[str] = [str(uuid.uuid4()) for _ in chunks]
         points = [
             PointStruct(
-                id=str(uuid.uuid4()),
+                id=pid,
                 vector=vec,
                 payload={
                     "document_id": document_id,
                     "version_hash": version_hash,
                     "run_id": run_id,
-                    "chunk_index": i,
-                    "text": chunk,
+                    "chunk_id": chunk["chunk_id"],
+                    "chunk_index": chunk["chunk_index"],
+                    "text": chunk["text"],
                     "strategy": self.STRATEGY_NAME,
-                    # Authorization list – extended when consumers are added
                     "authorized_consumers": [consumer_id],
                 },
             )
-            for i, (chunk, vec) in enumerate(zip(chunks, embedding_result.vectors, strict=False))
+            for pid, chunk, vec in zip(
+                new_point_ids, chunks, embedding_result.vectors, strict=False
+            )
         ]
         await self._qdrant.upsert(collection_name=collection, points=points)
 
-        self._prepared.setdefault(run_id, set()).add(document_id)
+        # Track state
+        self._prepared_versions[doc_key] = version_hash
+        self._authorized_consumers[doc_key] = {consumer_id}
+        self._doc_points[doc_key] = new_point_ids
 
         duration_ms = (time.monotonic() - t0) * 1000
         logger.info(
@@ -162,7 +213,9 @@ class SharedIntelligenceRAG(RAGStrategy):
     async def answer(self, request: RAGRequest) -> RAGResult:
         """Retrieve only from chunks authorized for this consumer."""
         total_t0 = time.monotonic()
-        collection = self.collection_name(request.run_id)
+        collection = self.collection_name(
+            run_id=request.run_id, repetition_index=request.repetition_index
+        )
 
         retrieval_t0 = time.monotonic()
         query_embedding = await self._embedder.embed([request.question])
@@ -178,17 +231,22 @@ class SharedIntelligenceRAG(RAGStrategy):
             ]
         )
 
-        hits = await self._qdrant.search(
-            collection_name=collection,
-            query_vector=query_vec,
-            query_filter=auth_filter,
-            limit=request.top_k,
-        )
+        try:
+            hits = await self._qdrant.search(
+                collection_name=collection,
+                query_vector=query_vec,
+                query_filter=auth_filter,
+                limit=request.top_k,
+            )
+        except Exception as exc:
+            logger.error("retrieval.failed", collection=collection, error=str(exc))
+            hits = []
+
         retrieval_ms = (time.monotonic() - retrieval_t0) * 1000
 
         chunks = [
             RetrievedChunk(
-                chunk_id=str(h.id),
+                chunk_id=str(h.payload.get("chunk_id", h.id)),
                 text=h.payload.get("text", ""),
                 score=h.score,
                 document_id=h.payload.get("document_id", ""),

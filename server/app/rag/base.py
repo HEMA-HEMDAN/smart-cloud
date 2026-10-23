@@ -28,6 +28,7 @@ class RAGRequest:
     question: str
     consumer_id: str
     top_k: int = 5
+    repetition_index: int = 0
 
 
 @dataclass
@@ -72,6 +73,9 @@ class RAGStrategy(ABC):
         text: str,
         run_id: str,
         consumer_id: str,
+        chunk_size: int = 512,
+        chunk_overlap: int = 64,
+        repetition_index: int = 0,
     ) -> dict[str, Any]:
         """
         Parse, chunk, embed, and store a document.
@@ -94,11 +98,16 @@ class RAGStrategy(ABC):
         ...
 
     @abstractmethod
-    def collection_name(self, run_id: str, consumer_id: str | None = None) -> str:
+    def collection_name(
+        self,
+        run_id: str,
+        consumer_id: str | None = None,
+        repetition_index: int = 0,
+    ) -> str:
         """
         Return the Qdrant collection name used by this strategy.
 
-        Independent strategy: includes consumer_id to ensure isolation.
-        Shared strategy: uses a shared collection name.
+        Independent strategy: includes consumer_id and repetition to ensure isolation.
+        Shared strategy: uses a run-and-repetition scoped collection name.
         """
         ...

@@ -1,6 +1,12 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { fetchExperiments, fetchHealth } from '../api/client';
+import { Link } from 'react-router-dom';
+import {
+  fetchExperiments,
+  fetchHealth,
+  fetchExperimentRuns,
+  fetchRunResults,
+} from '../api/client';
 import {
   TrendingDown,
   Layers,
@@ -8,7 +14,9 @@ import {
   ShieldCheck,
   CheckCircle2,
   AlertCircle,
-  HelpCircle
+  HelpCircle,
+  PlusCircle,
+  ArrowRight,
 } from 'lucide-react';
 
 export const Overview: React.FC = () => {
@@ -22,31 +30,80 @@ export const Overview: React.FC = () => {
     queryFn: fetchHealth,
   });
 
+  const latestExp = experiments?.[0];
+
+  // Fetch runs for the latest experiment
+  const { data: latestRuns } = useQuery({
+    queryKey: ['experiment-runs', latestExp?.id],
+    queryFn: () => fetchExperimentRuns(latestExp!.id),
+    enabled: Boolean(latestExp?.id),
+  });
+
+  const completedRun = latestRuns?.find((r) => r.status === 'completed');
+
+  // Fetch results if a completed run exists
+  const { data: results } = useQuery({
+    queryKey: ['run-results', completedRun?.id],
+    queryFn: () => fetchRunResults(completedRun!.id),
+    enabled: Boolean(completedRun?.id),
+  });
+
   const totalConfigs = experiments?.length ?? 0;
 
+  // Compute metrics from results
+  const costA = results?.cost_summary?.per_strategy?.independent;
+  const costB = results?.cost_summary?.per_strategy?.shared;
+  const totalA = costA?.total_workload_usd || 0;
+  const totalB = costB?.total_workload_usd || 0;
+  const savingsPct = totalA > 0 ? (((totalA - totalB) / totalA) * 100).toFixed(1) : null;
+
+  const reuseRate =
+    results?.reuse_summary?.reuse_rate !== null && results?.reuse_summary?.reuse_rate !== undefined
+      ? `${(results.reuse_summary.reuse_rate * 100).toFixed(1)}%`
+      : null;
+
+  const latA = results?.latency_summary?.per_strategy?.independent?.p50_ms;
+  const latB = results?.latency_summary?.per_strategy?.shared?.p50_ms;
+  const latencyDelta = latA && latB ? `${(latB - latA).toFixed(0)} ms` : null;
+
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 pb-12">
       {/* Page Title & Instrument State Banner */}
-      <div>
-        <h1 className="text-2xl font-bold text-white tracking-tight">Research Instrument Overview</h1>
-        <p className="text-sm text-gray-400 mt-1">
-          Evaluating whether demand-driven shared document intelligence reduces aggregate preparation cost while maintaining latency and strict authorization isolation.
-        </p>
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-white tracking-tight">Research Instrument Overview</h1>
+          <p className="text-sm text-gray-400 mt-1">
+            Evaluating whether demand-driven shared document intelligence reduces aggregate preparation cost while maintaining latency and strict authorization isolation.
+          </p>
+        </div>
+        <Link
+          to="/experiments/new"
+          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-xs font-semibold transition shrink-0 shadow-lg shadow-blue-600/20"
+        >
+          <PlusCircle className="w-4 h-4" />
+          <span>New Experiment</span>
+        </Link>
       </div>
 
       {/* Primary Research Metrics Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
         <div className="glass-panel p-5 rounded-xl border border-white/10">
           <div className="flex items-center justify-between text-gray-400 mb-2">
-            <span className="text-xs uppercase tracking-wider font-semibold">Prep Cost Ratio</span>
+            <span className="text-xs uppercase tracking-wider font-semibold">Cost Savings</span>
             <TrendingDown className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="text-2xl font-bold text-white font-mono">
-            --
+            {savingsPct !== null ? `${savingsPct}%` : '--'}
           </div>
           <div className="flex items-center gap-1.5 mt-2 text-xs text-gray-400">
-            <HelpCircle className="w-3.5 h-3.5 text-gray-500" />
-            <span>Awaiting completed runs</span>
+            {savingsPct !== null ? (
+              <span className="text-emerald-400 text-[11px] font-mono">Strategy B vs Baseline A</span>
+            ) : (
+              <>
+                <HelpCircle className="w-3.5 h-3.5 text-gray-500" />
+                <span>Awaiting completed runs</span>
+              </>
+            )}
           </div>
         </div>
 
@@ -56,11 +113,19 @@ export const Overview: React.FC = () => {
             <Layers className="w-4 h-4 text-blue-400" />
           </div>
           <div className="text-2xl font-bold text-white font-mono">
-            --
+            {reuseRate !== null ? reuseRate : '--'}
           </div>
           <div className="flex items-center gap-1.5 mt-2 text-xs text-gray-400">
-            <HelpCircle className="w-3.5 h-3.5 text-gray-500" />
-            <span>Strategy B first-demand metric</span>
+            {reuseRate !== null ? (
+              <span className="text-blue-400 text-[11px] font-mono">
+                {results?.reuse_summary?.avoided_preparations || 0} avoided preps
+              </span>
+            ) : (
+              <>
+                <HelpCircle className="w-3.5 h-3.5 text-gray-500" />
+                <span>Strategy B reuse metric</span>
+              </>
+            )}
           </div>
         </div>
 
@@ -70,11 +135,17 @@ export const Overview: React.FC = () => {
             <Clock className="w-4 h-4 text-purple-400" />
           </div>
           <div className="text-2xl font-bold text-white font-mono">
-            --
+            {latencyDelta !== null ? latencyDelta : '--'}
           </div>
           <div className="flex items-center gap-1.5 mt-2 text-xs text-gray-400">
-            <HelpCircle className="w-3.5 h-3.5 text-gray-500" />
-            <span>p50 (Shared) vs p50 (Indep)</span>
+            {latB ? (
+              <span className="text-purple-400 text-[11px] font-mono">p50: {latB.toFixed(0)}ms (Shared)</span>
+            ) : (
+              <>
+                <HelpCircle className="w-3.5 h-3.5 text-gray-500" />
+                <span>p50 (Shared) vs p50 (Indep)</span>
+              </>
+            )}
           </div>
         </div>
 
@@ -84,7 +155,7 @@ export const Overview: React.FC = () => {
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
           </div>
           <div className="text-2xl font-bold text-emerald-400 font-mono">
-            0 Violations
+            {results ? `${results.security_violations} Violations` : '0 Violations'}
           </div>
           <div className="flex items-center gap-1.5 mt-2 text-xs text-emerald-400/80">
             <CheckCircle2 className="w-3.5 h-3.5" />
@@ -164,6 +235,7 @@ export const Overview: React.FC = () => {
                   <th className="px-4 py-3 font-medium">Dataset</th>
                   <th className="px-4 py-3 font-medium">Repetitions</th>
                   <th className="px-4 py-3 font-medium">Created At</th>
+                  <th className="px-4 py-3 font-medium text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/5">
@@ -175,6 +247,15 @@ export const Overview: React.FC = () => {
                     <td className="px-4 py-3 text-xs text-gray-400">
                       {new Date(exp.created_at).toLocaleString()}
                     </td>
+                    <td className="px-4 py-3 text-right">
+                      <Link
+                        to={`/experiments/${exp.id}`}
+                        className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 font-medium"
+                      >
+                        <span>View Runs</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </Link>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -184,9 +265,16 @@ export const Overview: React.FC = () => {
           <div className="py-10 text-center rounded-lg border border-dashed border-white/10 bg-white/[0.02]">
             <AlertCircle className="w-8 h-8 text-gray-500 mx-auto mb-2" />
             <div className="text-sm font-medium text-gray-300">No experiments configured yet</div>
-            <p className="text-xs text-gray-500 mt-1">
+            <p className="text-xs text-gray-500 mt-1 mb-4">
               Create an experiment configuration to initiate paired A/B benchmarks.
             </p>
+            <Link
+              to="/experiments/new"
+              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-xs font-semibold transition"
+            >
+              <PlusCircle className="w-3.5 h-3.5" />
+              <span>Launch First Experiment</span>
+            </Link>
           </div>
         )}
       </div>
