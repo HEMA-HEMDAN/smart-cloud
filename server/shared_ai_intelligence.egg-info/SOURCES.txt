@@ -1,0 +1,6 @@
+pyproject.toml
+shared_ai_intelligence.egg-info/PKG-INFO
+shared_ai_intelligence.egg-info/SOURCES.txt
+shared_ai_intelligence.egg-info/dependency_links.txt
+shared_ai_intelligence.egg-info/requires.txt
+shared_ai_intelligence.egg-info/top_level.txt
